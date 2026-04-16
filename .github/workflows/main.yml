@@ -1,0 +1,112 @@
+# .github/workflows/test-pipeline.yml
+#
+# GitHub Actions CI/CD Pipeline — BookStore API Tests
+# =====================================================
+# Triggers : on every push and pull request to main/develop
+# Free tier : 2,000 minutes/month for public repos (unlimited)
+#             500 minutes/month for private repos
+#
+# Place this file at: .github/workflows/test-pipeline.yml
+
+name: BookStore API — CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+
+  # ── Job 1: Lint & static checks ──────────────────────────
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linting tools
+        run: pip install flake8
+
+      - name: Run flake8
+        run: flake8 app.py test_api.py --max-line-length=120 --ignore=E501
+
+  # ── Job 2: Run API tests ──────────────────────────────────
+  test:
+    name: Run API Tests
+    runs-on: ubuntu-latest
+    needs: lint          # only runs if lint passes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start Flask server in background
+        run: |
+          python app.py &
+          echo "Waiting for server to start..."
+          sleep 3
+
+      - name: Run pytest with coverage
+        run: |
+          pytest test_api.py -v \
+            --tb=short \
+            --junitxml=reports/results.xml \
+            --cov=app \
+            --cov-report=xml:reports/coverage.xml \
+            --cov-report=term-missing
+
+      - name: Upload test results
+        if: always()       # upload even if tests fail
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: reports/
+
+      - name: Publish test summary
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Pytest Results
+          path: reports/results.xml
+          reporter: java-junit
+
+  # ── Job 3: Build summary ──────────────────────────────────
+  notify:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [ lint, test ]
+    if: always()
+
+    steps:
+      - name: Print result
+        run: |
+          echo "Lint  status : ${{ needs.lint.result }}"
+          echo "Test  status : ${{ needs.test.result }}"
+          if [ "${{ needs.test.result }}" == "success" ]; then
+            echo "✅ All tests passed — safe to merge!"
+          else
+            echo "❌ Tests failed — do NOT merge."
+            exit 1
+          fi
